@@ -11,6 +11,8 @@
 #include "zend_extensions.h"
 #include "zend_exceptions.h"
 #include "Zend/zend_compile.h"
+#include "Zend/zend_closures.h"
+#include "Zend/zend_smart_str.h"
 
 #include "zend.h"
 #include "SAPI.h"
@@ -358,6 +360,15 @@ void meminfo_zval_dump(php_stream * stream, char * frame_label, zend_string * sy
         php_stream_printf(stream, "        \"is_root\" : false\n");
     }
 
+    if (Z_TYPE_P(zv) == IS_STRING) {
+	    smart_str str = {0};
+	    size_t len = Z_STRLEN_P(zv);
+	    smart_str_append_escaped(&str, Z_STRVAL_P(zv), len > 128 ? 128 : len);
+	    smart_str_0(&str);
+	    php_stream_printf(stream, ",        \"string\" : \"%s%s\"\n", ZSTR_VAL(str.s), Z_STRLEN_P(zv) > 128 ? "[...]" : "");
+	    smart_str_free(&str);
+    }
+
     if (Z_TYPE_P(zv) == IS_OBJECT) {
         HashTable *properties;
         zend_string * escaped_class_name;
@@ -372,6 +383,24 @@ void meminfo_zval_dump(php_stream * stream, char * frame_label, zend_string * sy
         zend_string_release(escaped_class_name);
 
         php_stream_printf(stream, "        \"object_handle\" : \"%d\",\n", Z_OBJ_HANDLE_P(zv));
+
+	zend_class_entry *ce = Z_OBJCE_P(zv);
+	if (ce == zend_ce_closure) {
+		zend_class_entry *closure_scope;
+		zend_function *closure_fun;
+		zend_object *closure_this;
+		php_stream_printf(stream, "        \"is_closure\" : true,\n");
+		if (Z_OBJ_HANDLER_P(zv, get_closure) && Z_OBJ_HANDLER_P(zv, get_closure)(Z_OBJ_P(zv), &closure_scope, &closure_fun, &closure_this, false) == SUCCESS) {
+			if (closure_scope) {
+				php_stream_printf(stream, "        \"scope\" : \"%s\",\n", ZSTR_VAL(closure_scope->name));
+			}
+			if (closure_fun->type == ZEND_USER_FUNCTION) {
+				php_stream_printf(stream, "        \"filename\" : \"%s\",\n", ZSTR_VAL(closure_fun->op_array.filename));
+				php_stream_printf(stream, "        \"line_start\" : \"%d\",\n", (int) closure_fun->op_array.line_start);
+				php_stream_printf(stream, "        \"line_end\" : \"%d\",\n", (int) closure_fun->op_array.line_end);
+			}
+		}
+	}
 
 #if PHP_VERSION_ID >= 70400
         properties = zend_get_properties_for(zv, ZEND_PROP_PURPOSE_DEBUG);
